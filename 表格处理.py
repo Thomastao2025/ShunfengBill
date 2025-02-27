@@ -278,45 +278,28 @@ class ExcelProcessor:
                                         self.total_payable = right_value
                                         break
 
-            # 查找理赔费用合计 - 全新的方法，基于"理赔费用"标题和H列的合计值
-            # 1. 查找"理赔费用"标题行
-            claims_section_row = None
-            for row in range(1, max_row + 1):
-                for col in range(1, 20):
-                    cell_value = detail_sheet.cell(row=row, column=col).value
-                    if cell_value and isinstance(cell_value, str) and "理赔费用" in cell_value:
-                        claims_section_row = row
-                        break
-                if claims_section_row:
-                    break
+     # 查找理赔费用合计 - 在H列中找最小的负值
+h_column_values = []
+for row in range(2, max_row + 1):  # 从第2行开始，跳过表头
+    cell_value = detail_sheet.cell(row=row, column=8).value  # H列 = 8
+    if self._is_valid_number(cell_value):
+        # 如果是字符串，尝试转换为浮点数
+        if isinstance(cell_value, str):
+            try:
+                cleaned_value = re.sub(r'[^\d.-]', '', cell_value)
+                if cleaned_value:  # 确保不是空字符串
+                    h_column_values.append(float(cleaned_value))
+            except ValueError:
+                pass
+        else:
+            h_column_values.append(float(cell_value))
 
-            # 2. 如果找到了理赔费用区域标题行，查找其后的合计行和H列的值
-            if claims_section_row:
-                claims_total_row = None
-                # 从理赔费用标题行开始向下搜索合计行
-                for row in range(claims_section_row, min(claims_section_row + 30, max_row + 1)):
-                    for col in range(1, 20):
-                        cell_value = detail_sheet.cell(row=row, column=col).value
-                        if cell_value and isinstance(cell_value, str) and (
-                                "合计" in cell_value or "合 计" in cell_value):
-                            claims_total_row = row
-                            break
-                    if claims_total_row:
-                        break
-
-                # 3. 如果找到了理赔费用区域的合计行，提取H列(=8)的值
-                if claims_total_row:
-                    claims_value = detail_sheet.cell(row=claims_total_row, column=8).value  # H列=8
-                    if self._is_valid_number(claims_value):
-                        self.total_claims = claims_value
-                    else:
-                        # 如果H列没有有效数值，尝试查找该行其他列的数值
-                        for col in range(1, 20):
-                            value = detail_sheet.cell(row=claims_total_row, column=col).value
-                            if self._is_valid_number(value):
-                                self.total_claims = value
-                                break
-            # 如果未找到理赔费用区域，理赔费用合计将保持为None
+# 从H列值中找到最小的负值作为理赔费用
+negative_values = [val for val in h_column_values if val < 0]
+if negative_values:
+    self.total_claims = min(negative_values)  # 取最小的负值
+else:
+    self.total_claims = None  # 没有找到负值，理赔费用为空
 
         except Exception as e:
             # 记录错误但不中断程序
