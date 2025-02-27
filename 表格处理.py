@@ -1,12 +1,11 @@
-import streamlit as st
 import pandas as pd
 import openpyxl
+import tkinter as tk
+from tkinter import filedialog, messagebox, Frame, Label, Button, StringVar, ttk
 import os
 import traceback
+import threading
 import re
-import io
-import tempfile
-import base64
 
 
 class ExcelProcessor:
@@ -20,34 +19,16 @@ class ExcelProcessor:
         self.total_payable = None
         self.total_claims = None
 
-    def process_excel(self, file_bytes, file_name):
+    def process_excel(self, file_path):
         """处理Excel文件，提取所需信息"""
-        self.file_path = file_name  # 使用文件名代替完整路径
+        self.file_path = file_path
 
         try:
-            # 创建临时文件以使openpyxl能够处理
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
-                temp_file.write(file_bytes)
-                temp_path = temp_file.name
-
             # 使用openpyxl加载工作簿以处理合并单元格
-            wb = openpyxl.load_workbook(temp_path, data_only=True)
+            wb = openpyxl.load_workbook(file_path, data_only=True)
 
             # 1. 获取月结账号 (从账单总览sheet的J6:L6合并单元格)
-            try:
-                overview_sheet = wb["账单总览"]
-            except KeyError:
-                # 如果没有找到账单总览，尝试找其他可能的sheet名
-                sheet_names = wb.sheetnames
-                overview_sheet = None
-                for name in sheet_names:
-                    if "总览" in name or "概览" in name:
-                        overview_sheet = wb[name]
-                        break
-                
-                if overview_sheet is None:
-                    # 如果仍然找不到，使用第一个sheet
-                    overview_sheet = wb[sheet_names[0]]
+            overview_sheet = wb["账单总览"]
 
             # 查找合并单元格
             for merged_range in overview_sheet.merged_cells.ranges:
@@ -70,23 +51,7 @@ class ExcelProcessor:
                     break
 
             # 3. 获取当月单量 - 修改为获取账单明细表的A列最后一个数值
-            try:
-                detail_sheet = wb["账单明细"]
-            except KeyError:
-                # 如果没有找到账单明细，尝试找其他可能的sheet名
-                sheet_names = wb.sheetnames
-                detail_sheet = None
-                for name in sheet_names:
-                    if "明细" in name or "详情" in name:
-                        detail_sheet = wb[name]
-                        break
-                
-                if detail_sheet is None:
-                    # 如果仍然找不到，使用第一个不是总览的sheet
-                    for name in sheet_names:
-                        if name != overview_sheet.title:
-                            detail_sheet = wb[name]
-                            break
+            detail_sheet = wb["账单明细"]
 
             # 从A列提取数字值
             numeric_values = []
@@ -123,12 +88,6 @@ class ExcelProcessor:
             # 动态查找汇总数据所在行
             self._find_summary_values(detail_sheet)
 
-            # 删除临时文件
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
-
             return {
                 "月结账号": self.monthly_account,
                 "账单周期": self.billing_period,
@@ -137,16 +96,10 @@ class ExcelProcessor:
                 "折扣/促销": self.total_discount,
                 "应付金额": self.total_payable,
                 "理赔费用合计": self.total_claims,
-                "文件名": file_name
+                "文件名": os.path.basename(file_path)
             }
 
         except Exception as e:
-            # 确保清理临时文件
-            try:
-                if 'temp_path' in locals():
-                    os.unlink(temp_path)
-            except:
-                pass
             error_message = f"处理文件时出错: {str(e)}\n{traceback.format_exc()}"
             raise Exception(error_message)
 
@@ -278,8 +231,7 @@ class ExcelProcessor:
                                         self.total_payable = right_value
                                         break
 
-            # 查找理赔费用合计 - 全新的方法，基于"理赔费用"标题和H列的合计值
-            # 1. 查找"理赔费用"标题行
+            # 查找理赔费用合计 - 基于你提供的逻辑
             claims_section_row = None
             for row in range(1, max_row + 1):
                 for col in range(1, 20):
@@ -290,33 +242,21 @@ class ExcelProcessor:
                 if claims_section_row:
                     break
 
-            # 2. 如果找到了理赔费用区域标题行，查找其后的合计行和H列的值
+            h_column_negative_values = []
             if claims_section_row:
-                claims_total_row = None
-                # 从理赔费用标题行开始向下搜索合计行
-                for row in range(claims_section_row, min(claims_section_row + 30, max_row + 1)):
-                    for col in range(1, 20):
-                        cell_value = detail_sheet.cell(row=row, column=col).value
-                        if cell_value and isinstance(cell_value, str) and (
-                                "合计" in cell_value or "合 计" in cell_value):
-                            claims_total_row = row
-                            break
-                    if claims_total_row:
-                        break
+                search_end_row = min(claims_section_row + 30, max_row + 1)
+                for row in range(claims_section_row, search_end_row):
+                    h_value = detail_sheet.cell(row=row, column=8).value
+                    if self._is_valid_number(h_value):
+                        if isinstance(h_value, str):
+                            h_value = float(re.sub(r'[^\d.-]', '', h_value))
+                        if float(h_value) < 0:
+                            h_column_negative_values.append(float(h_value))
 
-                # 3. 如果找到了理赔费用区域的合计行，提取H列(=8)的值
-                if claims_total_row:
-                    claims_value = detail_sheet.cell(row=claims_total_row, column=8).value  # H列=8
-                    if self._is_valid_number(claims_value):
-                        self.total_claims = claims_value
-                    else:
-                        # 如果H列没有有效数值，尝试查找该行其他列的数值
-                        for col in range(1, 20):
-                            value = detail_sheet.cell(row=claims_total_row, column=col).value
-                            if self._is_valid_number(value):
-                                self.total_claims = value
-                                break
-            # 如果未找到理赔费用区域，理赔费用合计将保持为None
+            if h_column_negative_values:
+                self.total_claims = min(h_column_negative_values)
+            else:
+                self.total_claims = None
 
         except Exception as e:
             # 记录错误但不中断程序
@@ -324,154 +264,107 @@ class ExcelProcessor:
             traceback.print_exc()
 
 
-def get_table_download_link(df):
-    """生成一个下载链接，允许下载DataFrame作为Excel文件"""
-    # 将DataFrame转换为Excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-    excel_data = output.getvalue()
-    
-    # 使用base64编码
-    b64 = base64.b64encode(excel_data).decode()
-    
-    # 创建下载链接
-    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="账单数据提取结果.xlsx">下载Excel文件</a>'
-    return href
+class Application(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("账单数据提取工具")
+        self.geometry("1100x600")  # 增加窗口宽度以适应更多列
+        self.configure(bg="#f5f5f5")
+        self.processor = ExcelProcessor()
+        self.results = []
+        self.is_processing = False
 
+        self.create_widgets()
 
-def main():
-    st.set_page_config(
-        page_title="供销云仓账单数据提取工具",
-        page_icon="📊",
-        layout="wide"
-    )
+    def create_widgets(self):
+        # 创建标题栏
+        title_frame = Frame(self, bg="#4a7abc", height=60)
+        title_frame.pack(fill=tk.X, pady=(0, 20))
 
-    st.markdown("# 供销云仓账单数据提取工具")
-    st.markdown("---")
+        title_label = Label(title_frame, text="供销云仓账单数据提取工具",
+                            font=("Microsoft YaHei UI", 16, "bold"), bg="#4a7abc", fg="white")
+        title_label.pack(pady=15)
 
-    # 侧边栏 - 用于上传文件和显示操作状态
-    with st.sidebar:
-        st.header("操作面板")
-        
-        uploaded_files = st.file_uploader(
-            "上传账单Excel文件",
-            type=["xlsx", "xls"],
-            accept_multiple_files=True
-        )
-        
-        if st.button("清除结果", key="clear_button"):
-            # 清除结果
-            if "results" in st.session_state:
-                st.session_state.results = []
-                st.success("已清除所有结果！")
-    
-    # 主界面 - 显示结果表格
-    if "results" not in st.session_state:
-        st.session_state.results = []
-    
-    # 处理上传的文件
-    if uploaded_files:
-        processor = ExcelProcessor()
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        total_files = len(uploaded_files)
+        # 创建按钮框架
+        button_frame = Frame(self, bg="#f5f5f5")
+        button_frame.pack(pady=10)
+
+        # 设置按钮样式
+        button_style = {"font": ("Microsoft YaHei UI", 10),
+                        "bg": "#4a7abc", "fg": "white",
+                        "activebackground": "#3a5a8c", "activeforeground": "white",
+                        "width": 15, "height": 2, "bd": 0}
+
+        # 导入按钮
+        self.import_button = Button(button_frame, text="导入账单文件", command=self.import_excel, **button_style)
+        self.import_button.pack(side=tk.LEFT, padx=10)
+
+        # 导出按钮
+        self.export_button = Button(button_frame, text="导出处理结果", command=self.export_results, **button_style)
+        self.export_button.pack(side=tk.LEFT, padx=10)
+
+        # 清除按钮
+        self.clear_button = Button(button_frame, text="清除结果", command=self.clear_results, **button_style)
+        self.clear_button.pack(side=tk.LEFT, padx=10)
+
+        # 创建一个框架来容纳表格
+        table_frame = Frame(self, bg="#f5f5f5")
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # 创建表格 - 添加新的列
+        columns = ("文件名", "月结账号", "账单周期", "当月单量", "费用(元)", "折扣/促销", "应付金额", "理赔费用合计")
+        self.result_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
+
+        # 设置列宽
+        self.result_tree.column("文件名", width=180)
+        self.result_tree.column("月结账号", width=120)
+        self.result_tree.column("账单周期", width=180)
+        self.result_tree.column("当月单量", width=80)
+        self.result_tree.column("费用(元)", width=100)
+        self.result_tree.column("折扣/促销", width=100)
+        self.result_tree.column("应付金额", width=100)
+        self.result_tree.column("理赔费用合计", width=100)
+
+        # 设置列标题
+        for col in columns:
+            self.result_tree.heading(col, text=col)
+
+        # 添加垂直滚动条
+        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.result_tree.yview)
+        self.result_tree.configure(yscroll=scrollbar.set)
+
+        # 添加水平滚动条
+        h_scrollbar = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.result_tree.xview)
+        self.result_tree.configure(xscroll=h_scrollbar.set)
+
+        # 放置表格和滚动条
+        self.result_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 进度条
+        self.progress_frame = Frame(self, bg="#f5f5f5")
+        self.progress_frame.pack(fill=tk.X, padx=20, pady=5)
+
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(self.progress_frame, variable=self.progress_var, maximum=100)
+        self.progress_bar.pack(fill=tk.X)
+
+        # 状态栏
+        self.status_var = StringVar()
+        self.status_var.set("准备就绪")
+        self.status_bar = Label(self, textvariable=self.status_var, bd=1, relief=tk.SUNKEN,
+                                anchor=tk.W, font=("Microsoft YaHei UI", 9), bg="#f0f0f0")
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # 设置表格样式
+        style = ttk.Style()
+        style.configure("Treeview", font=("Microsoft YaHei UI", 9), rowheight=25)
+        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"))
+
+    def process_files_thread(self, file_paths):
+        """在单独的线程中处理文件"""
         processed_count = 0
         failed_files = []
-        
-        for i, file in enumerate(uploaded_files):
-            try:
-                # 更新进度
-                progress = (i + 1) / total_files
-                progress_bar.progress(progress)
-                
-                # 更新状态栏
-                status_text.text(f"正在处理: {file.name} ({i + 1}/{total_files})")
-                
-                # 处理Excel文件
-                file_bytes = file.read()
-                result = processor.process_excel(file_bytes, file.name)
-                
-                # 检查结果是否已存在（按文件名）
-                exists = False
-                for r in st.session_state.results:
-                    if r["文件名"] == result["文件名"]:
-                        exists = True
-                        break
-                
-                # 只有不存在时才添加
-                if not exists:
-                    st.session_state.results.append(result)
-                
-                processed_count += 1
-                
-            except Exception as e:
-                failed_files.append((file.name, str(e)))
-                st.error(f"处理文件 {file.name} 失败")
-                print(f"处理文件 {file.name} 失败: {str(e)}")
-        
-        # 完成处理后的操作
-        progress_bar.empty()
-        
-        if failed_files:
-            status_text.text(f"已完成处理 {processed_count} 个文件，{len(failed_files)} 个文件失败")
-            
-            with st.expander("查看失败文件详情"):
-                for i, (file_name, error) in enumerate(failed_files):
-                    st.write(f"{i + 1}. {file_name}")
-                    st.write(f"错误: {error.split('Traceback')[0]}")  # 只显示错误的第一部分
-        else:
-            status_text.text(f"已完成处理 {processed_count} 个文件")
-    
-    # 显示结果表格
-    if st.session_state.results:
-        st.markdown("## 处理结果")
-        
-        # 转换为DataFrame
-        results_df = pd.DataFrame(st.session_state.results)
-        
-        # 显示表格
-        st.dataframe(
-            results_df,
-            hide_index=True,
-            use_container_width=True
-        )
-        
-        # 下载按钮
-        st.markdown(get_table_download_link(results_df), unsafe_allow_html=True)
-    else:
-        st.info("请上传账单Excel文件以开始处理")
-    
-    # 显示使用说明
-    with st.expander("查看使用说明"):
-        st.markdown("""
-        ### 使用说明
-        
-        1. 在左侧操作面板点击"上传账单Excel文件"按钮上传一个或多个账单文件。
-        2. 系统会自动处理上传的文件并提取关键数据。
-        3. 处理结果将显示在表格中，包含以下字段：
-           - 文件名
-           - 月结账号
-           - 账单周期
-           - 当月单量
-           - 费用(元)
-           - 折扣/促销
-           - 应付金额
-           - 理赔费用合计
-        4. 点击"下载Excel文件"链接可以将结果下载为Excel文件。
-        5. 使用"清除结果"按钮可以清空当前结果。
-        
-        ### 注意事项
-        
-        - 支持的文件格式：.xlsx, .xls
-        - 如果某些字段没有被正确提取，可能是因为文件结构与预期不符
-        - 所有处理都在浏览器中完成，数据不会被上传到服务器
-        """)
-    
-    # 页脚
-    st.markdown("---")
-    st.markdown("供销云仓账单数据提取工具 © 2025")
 
-if __name__ == "__main__":
-    main()
+        total
