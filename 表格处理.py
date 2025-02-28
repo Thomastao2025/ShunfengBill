@@ -69,7 +69,7 @@ class ExcelProcessor:
                     self.billing_period = overview_sheet.cell(row=7, column=4).value
                     break
 
-            # 3. 获取当月单量 - 修改为获取账单明细表的A列最后一个数值
+            # 3. 获取当月单量 - 修改为统计服务字段为运费的行数
             try:
                 detail_sheet = wb["账单明细"]
             except KeyError:
@@ -88,36 +88,62 @@ class ExcelProcessor:
                             detail_sheet = wb[name]
                             break
 
-            # 从A列提取数字值
-            numeric_values = []
+            # 查找服务字段所在的列
+            service_col = None
+            header_row = None
 
-            for row in range(2, detail_sheet.max_row + 1):  # 从第2行开始，跳过表头
-                cell_value = detail_sheet.cell(row=row, column=1).value
+            # 尝试找到标题行和服务字段所在的列
+            for row in range(1, 10):  # 在前10行中查找标题
+                for col in range(1, 15):  # 在前15列中查找
+                    cell_value = detail_sheet.cell(row=row, column=col).value
+                    if cell_value and isinstance(cell_value, str) and "服务" in cell_value:
+                        service_col = col
+                        header_row = row
+                        break
+                if service_col:
+                    break
 
-                if cell_value is not None:
-                    # 处理不同类型的值
-                    try:
-                        # 如果是字符串，提取数字部分
-                        if isinstance(cell_value, str):
-                            numbers = re.findall(r'\d+', cell_value)
-                            if numbers:
-                                numeric_values.append(int(numbers[0]))
-                        # 如果是数字，直接使用
-                        elif isinstance(cell_value, (int, float)):
-                            numeric_values.append(int(cell_value))
-                    except (ValueError, TypeError):
-                        continue
-
-            # 如果找到了数值，取最大值作为单量
-            if numeric_values:
-                self.order_count = max(numeric_values)
+            # 如果找到了服务列，统计包含"运费"的行数
+            if service_col and header_row:
+                freight_count = 0
+                for row in range(header_row + 1, detail_sheet.max_row + 1):
+                    service_value = detail_sheet.cell(row=row, column=service_col).value
+                    if service_value and isinstance(service_value, str) and "运费" in service_value:
+                        freight_count += 1
+                
+                if freight_count > 0:
+                    self.order_count = freight_count
+                else:
+                    # 如果没有找到运费相关行，回退到计算非空行数
+                    non_empty_rows = 0
+                    for row in range(header_row + 1, detail_sheet.max_row + 1):
+                        if detail_sheet.cell(row=row, column=1).value is not None:
+                            non_empty_rows += 1
+                    self.order_count = non_empty_rows
             else:
-                # 如果无法从A列获取有效数值，计算非空行数
-                non_empty_rows = 0
+                # 如果没有找到服务列，回退到原来的方法
+                numeric_values = []
                 for row in range(2, detail_sheet.max_row + 1):
-                    if detail_sheet.cell(row=row, column=1).value is not None:
-                        non_empty_rows += 1
-                self.order_count = non_empty_rows
+                    cell_value = detail_sheet.cell(row=row, column=1).value
+                    if cell_value is not None:
+                        try:
+                            if isinstance(cell_value, str):
+                                numbers = re.findall(r'\d+', cell_value)
+                                if numbers:
+                                    numeric_values.append(int(numbers[0]))
+                            elif isinstance(cell_value, (int, float)):
+                                numeric_values.append(int(cell_value))
+                        except (ValueError, TypeError):
+                            continue
+
+                if numeric_values:
+                    self.order_count = max(numeric_values)
+                else:
+                    non_empty_rows = 0
+                    for row in range(2, detail_sheet.max_row + 1):
+                        if detail_sheet.cell(row=row, column=1).value is not None:
+                            non_empty_rows += 1
+                    self.order_count = non_empty_rows
 
             # 4. 获取账单明细中的汇总数据
             # 动态查找汇总数据所在行
@@ -278,28 +304,43 @@ class ExcelProcessor:
                                         self.total_payable = right_value
                                         break
 
-     # 查找理赔费用合计 - 在H列中找最小的负值
-h_column_values = []
-for row in range(2, max_row + 1):  # 从第2行开始，跳过表头
-    cell_value = detail_sheet.cell(row=row, column=8).value  # H列 = 8
-    if self._is_valid_number(cell_value):
-        # 如果是字符串，尝试转换为浮点数
-        if isinstance(cell_value, str):
-            try:
-                cleaned_value = re.sub(r'[^\d.-]', '', cell_value)
-                if cleaned_value:  # 确保不是空字符串
-                    h_column_values.append(float(cleaned_value))
-            except ValueError:
-                pass
-        else:
-            h_column_values.append(float(cell_value))
+            # 查找理赔费用合计 - 首先检查是否存在理赔费用相关单元格
+            has_claims = False
+            for row in range(1, max_row + 1):
+                for col in range(1, 20):
+                    cell_value = detail_sheet.cell(row=row, column=col).value
+                    if cell_value and isinstance(cell_value, str) and "理赔" in cell_value:
+                        has_claims = True
+                        break
+                if has_claims:
+                    break
+            
+            # 如果存在理赔费用相关单元格，则在H列中查找最小的负值
+            if has_claims:
+                h_column_values = []
+                for row in range(2, max_row + 1):  # 从第2行开始，跳过表头
+                    cell_value = detail_sheet.cell(row=row, column=8).value  # H列 = 8
+                    if self._is_valid_number(cell_value):
+                        # 如果是字符串，尝试转换为浮点数
+                        if isinstance(cell_value, str):
+                            try:
+                                cleaned_value = re.sub(r'[^\d.-]', '', cell_value)
+                                if cleaned_value:  # 确保不是空字符串
+                                    h_column_values.append(float(cleaned_value))
+                            except ValueError:
+                                pass
+                        else:
+                            h_column_values.append(float(cell_value))
 
-# 从H列值中找到最小的负值作为理赔费用
-negative_values = [val for val in h_column_values if val < 0]
-if negative_values:
-    self.total_claims = min(negative_values)  # 取最小的负值
-else:
-    self.total_claims = None  # 没有找到负值，理赔费用为空
+                # 从H列值中找到最小的负值作为理赔费用
+                negative_values = [val for val in h_column_values if val < 0]
+                if negative_values:
+                    self.total_claims = min(negative_values)  # 取最小的负值
+                else:
+                    self.total_claims = None  # 没有找到负值，理赔费用为空
+            else:
+                # 如果不存在理赔费用相关单元格，则设置为None
+                self.total_claims = None
 
         except Exception as e:
             # 记录错误但不中断程序
