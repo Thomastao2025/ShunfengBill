@@ -88,26 +88,23 @@ class ExcelProcessor:
                             detail_sheet = wb[name]
                             break
 
-            # 查找服务字段所在的列
-            service_col = None
+            # 查找标题行
             header_row = None
-
-            # 尝试找到标题行和服务字段所在的列
             for row in range(1, 10):  # 在前10行中查找标题
                 for col in range(1, 15):  # 在前15列中查找
                     cell_value = detail_sheet.cell(row=row, column=col).value
                     if cell_value and isinstance(cell_value, str) and "服务" in cell_value:
-                        service_col = col
                         header_row = row
                         break
-                if service_col:
+                if header_row:
                     break
-
-            # 如果找到了服务列，统计包含"运费"的行数
-            if service_col and header_row:
+            
+            # 直接使用N列（索引为14）查找运费
+            if header_row:
                 freight_count = 0
                 for row in range(header_row + 1, detail_sheet.max_row + 1):
-                    service_value = detail_sheet.cell(row=row, column=service_col).value
+                    # N列的索引为14（因为列索引从1开始，对应到代码是14）
+                    service_value = detail_sheet.cell(row=row, column=14).value
                     if service_value and isinstance(service_value, str) and "运费" in service_value:
                         freight_count += 1
                 
@@ -360,7 +357,7 @@ def get_table_download_link(df):
     b64 = base64.b64encode(excel_data).decode()
     
     # 创建下载链接
-    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="账单数据提取结果.xlsx">下载Excel文件</a>'
+    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="账单数据提取结果.xlsx" class="download-btn">📥 下载Excel文件</a>'
     return href
 
 
@@ -371,24 +368,80 @@ def main():
         layout="wide"
     )
 
-    st.markdown("# 供销云仓账单数据提取工具")
+    # 自定义CSS样式
+    st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1E88E5;
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        color: #424242;
+        margin-bottom: 1rem;
+    }
+    .success-message {
+        padding: 1rem;
+        background-color: #E8F5E9;
+        border-left: 5px solid #4CAF50;
+        margin-bottom: 1rem;
+    }
+    .info-box {
+        padding: 1rem;
+        background-color: #E3F2FD;
+        border-radius: 5px;
+        margin-bottom: 1rem;
+    }
+    .download-btn {
+        text-decoration: none;
+        padding: 0.5rem 1rem;
+        background-color: #1E88E5;
+        color: white;
+        border-radius: 4px;
+        display: inline-block;
+        margin: 1rem 0;
+        font-weight: bold;
+    }
+    .download-btn:hover {
+        background-color: #1565C0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='main-header'>供销云仓账单数据提取工具</div>", unsafe_allow_html=True)
     st.markdown("---")
 
     # 侧边栏 - 用于上传文件和显示操作状态
     with st.sidebar:
-        st.header("操作面板")
+        st.markdown("<div class='sub-header'>操作面板</div>", unsafe_allow_html=True)
+        
+        st.markdown("<div class='info-box'>上传您的账单Excel文件，系统将自动提取关键数据并生成汇总报表。</div>", unsafe_allow_html=True)
         
         uploaded_files = st.file_uploader(
             "上传账单Excel文件",
             type=["xlsx", "xls"],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            help="支持上传多个.xlsx或.xls格式的文件"
         )
         
-        if st.button("清除结果", key="clear_button"):
-            # 清除结果
-            if "results" in st.session_state:
-                st.session_state.results = []
-                st.success("已清除所有结果！")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("清除结果", key="clear_button", use_container_width=True):
+                # 清除结果
+                if "results" in st.session_state:
+                    st.session_state.results = []
+                    st.markdown("<div class='success-message'>已清除所有结果！</div>", unsafe_allow_html=True)
+        
+        with col2:
+            if st.button("刷新", key="refresh_button", use_container_width=True):
+                st.rerun()
+                
+        # 添加版本信息
+        st.markdown("---")
+        st.markdown("<div style='text-align: center; color: #9E9E9E; font-size: 0.8rem;'>版本 1.2.0</div>", unsafe_allow_html=True)
     
     # 主界面 - 显示结果表格
     if "results" not in st.session_state:
@@ -439,21 +492,35 @@ def main():
         progress_bar.empty()
         
         if failed_files:
-            status_text.text(f"已完成处理 {processed_count} 个文件，{len(failed_files)} 个文件失败")
+            status_text.markdown(f"<div style='color: #FF5722; font-weight: bold;'>已完成处理 {processed_count} 个文件，{len(failed_files)} 个文件失败</div>", unsafe_allow_html=True)
             
-            with st.expander("查看失败文件详情"):
+            with st.expander("查看失败文件详情", expanded=True):
                 for i, (file_name, error) in enumerate(failed_files):
-                    st.write(f"{i + 1}. {file_name}")
-                    st.write(f"错误: {error.split('Traceback')[0]}")  # 只显示错误的第一部分
+                    st.markdown(f"**{i + 1}. {file_name}**")
+                    st.markdown(f"<div style='color: #D32F2F; background-color: #FFEBEE; padding: 10px; border-radius: 5px;'>错误: {error.split('Traceback')[0]}</div>", unsafe_allow_html=True)  # 只显示错误的第一部分
         else:
-            status_text.text(f"已完成处理 {processed_count} 个文件")
+            status_text.markdown(f"<div style='color: #2E7D32; font-weight: bold;'>✅ 已成功处理 {processed_count} 个文件</div>", unsafe_allow_html=True)
     
     # 显示结果表格
     if st.session_state.results:
-        st.markdown("## 处理结果")
+        st.markdown("<div class='sub-header'>📊 处理结果</div>", unsafe_allow_html=True)
         
         # 转换为DataFrame
         results_df = pd.DataFrame(st.session_state.results)
+        
+        # 统计信息
+        total_files = len(results_df)
+        total_orders = results_df['当月单量'].sum() if '当月单量' in results_df.columns else 0
+        total_payable = results_df['应付金额'].sum() if '应付金额' in results_df.columns else 0
+        
+        # 显示统计信息
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("处理文件总数", f"{total_files}个")
+        with col2:
+            st.metric("总单量", f"{int(total_orders)}单")
+        with col3:
+            st.metric("总应付金额", f"¥{total_payable:.2f}")
         
         # 显示表格
         st.dataframe(
@@ -463,39 +530,66 @@ def main():
         )
         
         # 下载按钮
-        st.markdown(get_table_download_link(results_df), unsafe_allow_html=True)
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown(get_table_download_link(results_df), unsafe_allow_html=True)
     else:
-        st.info("请上传账单Excel文件以开始处理")
+        st.markdown("<div class='info-box'>请上传账单Excel文件以开始处理</div>", unsafe_allow_html=True)
     
     # 显示使用说明
-    with st.expander("查看使用说明"):
-        st.markdown("""
-        ### 使用说明
+    with st.expander("查看使用说明", expanded=False):
+        col1, col2 = st.columns(2)
         
-        1. 在左侧操作面板点击"上传账单Excel文件"按钮上传一个或多个账单文件。
-        2. 系统会自动处理上传的文件并提取关键数据。
-        3. 处理结果将显示在表格中，包含以下字段：
-           - 文件名
-           - 月结账号
-           - 账单周期
-           - 当月单量
-           - 费用(元)
-           - 折扣/促销
-           - 应付金额
-           - 理赔费用合计
-        4. 点击"下载Excel文件"链接可以将结果下载为Excel文件。
-        5. 使用"清除结果"按钮可以清空当前结果。
-        
-        ### 注意事项
-        
-        - 支持的文件格式：.xlsx, .xls
-        - 如果某些字段没有被正确提取，可能是因为文件结构与预期不符
-        - 所有处理都在浏览器中完成，数据不会被上传到服务器
-        """)
+        with col1:
+            st.markdown("""
+            ### 基本操作
+            
+            1. **上传文件** - 在左侧操作面板上传一个或多个账单Excel文件
+            2. **处理数据** - 系统自动提取关键数据并汇总
+            3. **查看结果** - 所有提取的数据将显示在表格中
+            4. **导出数据** - 点击"下载Excel文件"保存结果
+            5. **清除结果** - 使用"清除结果"按钮重新开始
+            
+            ### 数据提取说明
+            
+            系统会自动识别并提取以下字段：
+            - **月结账号** - 从账单总览sheet的合并单元格中提取
+            - **账单周期** - 从账单总览sheet中提取
+            - **当月单量** - 统计账单明细sheet中N列为"运费"的行数
+            - **费用(元)** - 从账单明细sheet的汇总行提取
+            - **折扣/促销** - 从账单明细sheet的汇总行提取
+            - **应付金额** - 从账单明细sheet的汇总行提取
+            - **理赔费用合计** - 如存在理赔相关单元格，取H列中最小负值
+            """)
+            
+        with col2:
+            st.markdown("""
+            ### 常见问题解答
+            
+            **Q: 为什么某些字段显示为空？**  
+            A: 可能是因为账单格式与系统预期不符，或该字段在原始账单中不存在。
+            
+            **Q: 数据提取有误怎么办？**  
+            A: 请检查原始Excel文件格式是否符合标准，或联系技术支持。
+            
+            **Q: 是否支持批量处理？**  
+            A: 是的，您可以一次上传多个文件进行批量处理。
+            
+            **Q: 数据会被上传到服务器吗？**  
+            A: 不会，所有处理都在您的浏览器中完成，数据不会离开您的设备。
+            
+            ### 技术说明
+            
+            - 支持的文件格式：**.xlsx**, **.xls**
+            - 最佳分辨率：1920×1080
+            - 推荐浏览器：Chrome, Edge, Firefox
+            """)
     
     # 页脚
     st.markdown("---")
-    st.markdown("供销云仓账单数据提取工具 © 2025")
+    footer_cols = st.columns([2, 1, 2])
+    with footer_cols[1]:
+        st.markdown("<div style='text-align: center;'>供销云仓账单数据提取工具 © 2025</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
