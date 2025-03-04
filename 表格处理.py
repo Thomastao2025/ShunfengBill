@@ -19,6 +19,8 @@ class ExcelProcessor:
         self.total_discount = None
         self.total_payable = None
         self.total_claims = None
+        self.overview_amount = None  # 新增：账单总览金额
+        self.special_ticket_discount = None  # 新增：特殊单票折扣
 
     def process_excel(self, file_bytes, file_name):
         """处理Excel文件，提取所需信息"""
@@ -163,6 +165,12 @@ class ExcelProcessor:
             # 4. 获取账单明细中的汇总数据
             # 动态查找汇总数据所在行
             self._find_summary_values(detail_sheet)
+            
+            # 5. 获取账单总览金额 (从账单总览sheet的J16:L16合并单元格)
+            self._find_overview_amount(overview_sheet)
+            
+            # 6. 获取特殊单票折扣
+            self._find_special_ticket_discount(detail_sheet)
 
             # 删除临时文件
             try:
@@ -178,6 +186,8 @@ class ExcelProcessor:
                 "折扣/促销": self.total_discount,
                 "应付金额": self.total_payable,
                 "理赔费用合计": self.total_claims,
+                "账单总览金额": self.overview_amount,  # 新增字段
+                "特殊单票折扣": self.special_ticket_discount,  # 新增字段
                 "文件名": file_name
             }
 
@@ -190,6 +200,87 @@ class ExcelProcessor:
                 pass
             error_message = f"处理文件时出错: {str(e)}\n{traceback.format_exc()}"
             raise Exception(error_message)
+
+    def _find_overview_amount(self, overview_sheet):
+        """获取账单总览金额（从账单总览sheet的J16:L16合并单元格）"""
+        self.overview_amount = None
+        
+        try:
+            # 首先检查J16:L16是否为合并单元格
+            for merged_range in overview_sheet.merged_cells.ranges:
+                min_col, min_row, max_col, max_row = merged_range.min_col, merged_range.min_row, merged_range.max_col, merged_range.max_row
+                
+                # 检查J16:L16合并单元格 (J=10, L=12, 行号为16)
+                if min_col == 10 and max_col == 12 and min_row == 16 and max_row == 16:
+                    # 从合并单元格的左上角获取值
+                    self.overview_amount = overview_sheet.cell(row=16, column=10).value
+                    return
+            
+            # 如果没有找到合并单元格，尝试直接获取J16单元格的值
+            self.overview_amount = overview_sheet.cell(row=16, column=10).value
+            
+            # 如果还是没有找到值，尝试在总览页面寻找"合计"或"总计"附近的金额
+            if not self._is_valid_number(self.overview_amount):
+                for row in range(15, 25):  # 在15-25行范围内查找
+                    for col in range(1, 15):
+                        cell_value = overview_sheet.cell(row=row, column=col).value
+                        if cell_value and isinstance(cell_value, str) and ("合计" in cell_value or "总计" in cell_value):
+                            # 找到合计行，尝试在同一行的后面几列查找金额
+                            for right_col in range(col + 1, col + 5):
+                                right_value = overview_sheet.cell(row=row, column=right_col).value
+                                if self._is_valid_number(right_value):
+                                    self.overview_amount = right_value
+                                    return
+        except Exception as e:
+            print(f"查找账单总览金额时出错: {str(e)}")
+            traceback.print_exc()
+
+    def _find_special_ticket_discount(self, detail_sheet):
+        """查找特殊单票折扣 - 类似理赔费用的查找逻辑"""
+        self.special_ticket_discount = None
+        max_row = detail_sheet.max_row
+        
+        try:
+            # 首先检查是否存在"特殊单票折扣"相关单元格
+            has_special_discount = False
+            for row in range(1, max_row + 1):
+                for col in range(1, 20):
+                    cell_value = detail_sheet.cell(row=row, column=col).value
+                    if cell_value and isinstance(cell_value, str) and "特殊单票折扣" in cell_value:
+                        has_special_discount = True
+                        break
+                if has_special_discount:
+                    break
+            
+            # 如果存在特殊单票折扣相关单元格，则在D列中找到最大的数字
+            if has_special_discount:
+                d_column_values = []
+                for row in range(2, max_row + 1):  # 从第2行开始，跳过表头
+                    cell_value = detail_sheet.cell(row=row, column=4).value  # D列 = 4
+                    if self._is_valid_number(cell_value):
+                        # 如果是字符串，尝试转换为浮点数
+                        if isinstance(cell_value, str):
+                            try:
+                                cleaned_value = re.sub(r'[^\d.-]', '', cell_value)
+                                if cleaned_value:  # 确保不是空字符串
+                                    d_column_values.append(float(cleaned_value))
+                            except ValueError:
+                                pass
+                        else:
+                            d_column_values.append(float(cell_value))
+                
+                # 从D列值中找到最大的数值作为特殊单票折扣
+                if d_column_values:
+                    self.special_ticket_discount = max(d_column_values)
+                else:
+                    self.special_ticket_discount = None  # 没有找到值，特殊单票折扣为空
+            else:
+                # 如果不存在特殊单票折扣相关单元格，则设置为None
+                self.special_ticket_discount = None
+                
+        except Exception as e:
+            print(f"查找特殊单票折扣时出错: {str(e)}")
+            traceback.print_exc()
 
     def _is_valid_number(self, value):
         """检查值是否为有效数字"""
@@ -498,6 +589,8 @@ def main():
            - 折扣/促销
            - 应付金额
            - 理赔费用合计
+           - 账单总览金额
+           - 特殊单票折扣
         4. 点击"下载Excel文件"链接可以将结果下载为Excel文件。
         5. 使用"清除结果"按钮可以清空当前结果。
         
