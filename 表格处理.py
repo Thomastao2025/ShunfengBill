@@ -35,7 +35,7 @@ class ExcelProcessor:
             # 使用openpyxl加载工作簿以处理合并单元格
             wb = openpyxl.load_workbook(temp_path, data_only=True)
 
-            # 1. 获取月结账号 (从账单总览sheet的J6:L6合并单元格)
+            # 1. 获取月结账号 (从账单总览sheet的D6:G6合并单元格)
             try:
                 overview_sheet = wb["账单总览"]
             except KeyError:
@@ -55,10 +55,10 @@ class ExcelProcessor:
             for merged_range in overview_sheet.merged_cells.ranges:
                 min_col, min_row, max_col, max_row = merged_range.min_col, merged_range.min_row, merged_range.max_col, merged_range.max_row
 
-                # 检查J6:L6合并单元格 (J=10, L=12, 行号为6)
-                if min_col == 10 and max_col == 12 and min_row == 6 and max_row == 6:
+                # 检查J6:L6合并单元格 (D=4, G=7, 行号为6)
+                if min_col == 4 and max_col == 7 and min_row == 6 and max_row == 6:
                     # 从合并单元格的左上角获取值
-                    self.monthly_account = overview_sheet.cell(row=6, column=10).value
+                    self.monthly_account = overview_sheet.cell(row=6, column=4).value
                     break
 
             # 2. 获取账单周期 (从账单总览sheet的D7:G7合并单元格)
@@ -166,7 +166,7 @@ class ExcelProcessor:
             # 动态查找汇总数据所在行
             self._find_summary_values(detail_sheet)
             
-            # 5. 获取账单总览金额 (从账单总览sheet的J16:L16合并单元格)
+            # 5. 获取账单总览金额 (从账单总览sheet的J17:L17合并单元格)
             self._find_overview_amount(overview_sheet)
             
             # 6. 获取特殊单票折扣
@@ -202,7 +202,7 @@ class ExcelProcessor:
             raise Exception(error_message)
 
     def _find_overview_amount(self, overview_sheet):
-        """获取账单总览金额（从账单总览sheet的J16:L16合并单元格）"""
+        """获取账单总览金额（从账单总览sheet的J17:L17合并单元格）"""
         self.overview_amount = None
         
         try:
@@ -210,14 +210,14 @@ class ExcelProcessor:
             for merged_range in overview_sheet.merged_cells.ranges:
                 min_col, min_row, max_col, max_row = merged_range.min_col, merged_range.min_row, merged_range.max_col, merged_range.max_row
                 
-                # 检查J16:L16合并单元格 (J=10, L=12, 行号为16)
-                if min_col == 10 and max_col == 12 and min_row == 16 and max_row == 16:
+                # 检查J16:L16合并单元格 (J=10, L=12, 行号为17)
+                if min_col == 10 and max_col == 12 and min_row == 17 and max_row == 17:
                     # 从合并单元格的左上角获取值
-                    self.overview_amount = overview_sheet.cell(row=16, column=10).value
+                    self.overview_amount = overview_sheet.cell(row=17, column=10).value
                     return
             
-            # 如果没有找到合并单元格，尝试直接获取J16单元格的值
-            self.overview_amount = overview_sheet.cell(row=16, column=10).value
+            # 如果没有找到合并单元格，尝试直接获取J17单元格的值
+            self.overview_amount = overview_sheet.cell(row=17, column=10).value
             
             # 如果还是没有找到值，尝试在总览页面寻找"合计"或"总计"附近的金额
             if not self._is_valid_number(self.overview_amount):
